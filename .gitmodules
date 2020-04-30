@@ -1,0 +1,3 @@
+[submodule "rimd"]
+	path = rimd
+	url = https://github.com/mbilker/rimd.git
