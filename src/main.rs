@@ -183,9 +183,6 @@ fn combine_events(events: Vec<TrackEvent>) -> Vec<DataEvent> {
 }
 
 fn play_events(unit_per_division: u64, events: &[DataEvent]) -> Result<()> {
-    let thread_boost = ThreadBoost::new();
-    println!("Task Index: {}", thread_boost.task_index());
-
     // Get an output port (read from console if multiple are available)
     let mut conn_out = match WinMidiPort::count() {
         0 => return Err(anyhow!("No output ports found")),
@@ -227,6 +224,9 @@ fn play_events(unit_per_division: u64, events: &[DataEvent]) -> Result<()> {
     conn_out
         .send(GS1_RESET)
         .context("Failed to send GS1 reset message")?;
+
+    let thread_boost = ThreadBoost::new();
+    println!("Task Index: {}", thread_boost.task_index());
 
     /*
     // Event handle for Windows MIDI stream

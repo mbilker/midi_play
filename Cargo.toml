@@ -1,0 +1,11 @@
+[package]
+name = "midi_play"
+version = "0.1.0"
+authors = ["Matt Bilker <me@mbilker.us>"]
+edition = "2018"
+
+[dependencies]
+anyhow = "1.0.28"
+ctrlc = "3.1.4"
+rimd = { path = "rimd" }
+winapi = { version = "0.3.8", features = ["avrt", "mmeapi", "mmsystem", "synchapi"] }
