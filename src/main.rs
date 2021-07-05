@@ -11,33 +11,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use rimd::{Event, MetaCommand, MetaEvent, TrackEvent, SMF};
+use rimd::{MetaCommand, SMF};
 use winapi::um::synchapi::{SetEvent, WaitForSingleObject};
 use winapi::um::winbase::INFINITE;
 
 mod driver;
+mod midi_file;
 mod thread_boost;
 
-use self::driver::WinMidiPort;
-use self::thread_boost::ThreadBoost;
+use crate::driver::WinMidiPort;
+use crate::midi_file::{DataEvent, LocalEvent};
+use crate::thread_boost::ThreadBoost;
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
-
-struct DataEvent {
-    delta_time: u64,
-    data: LocalEvent,
-}
-
-enum LocalEvent {
-    CombinedMidi(Vec<u8>),
-    Meta(MetaEvent),
-}
-
-impl DataEvent {
-    fn new(delta_time: u64, data: LocalEvent) -> Self {
-        Self { delta_time, data }
-    }
-}
 
 fn main() -> Result<()> {
     ctrlc::set_handler(|| {
@@ -70,116 +56,18 @@ fn main() -> Result<()> {
         }
 
         if let Some(previous_events) = events.take() {
-            events = Some(combine_tracks(previous_events, track.events));
+            events = Some(midi_file::combine_tracks(previous_events, track.events));
         } else {
             events = Some(track.events);
         }
     }
 
     if let Some(events) = events {
-        let events = combine_events(events);
+        let events = midi_file::combine_events(events);
         play_events(midi_data.division as u64, &events)?;
     }
 
     Ok(())
-}
-
-fn combine_tracks(
-    track1_events: Vec<TrackEvent>,
-    track2_events: Vec<TrackEvent>,
-) -> Vec<TrackEvent> {
-    let mut combined = Vec::with_capacity(track1_events.len() + track2_events.len());
-
-    let mut track1 = track1_events.into_iter();
-    let mut track2 = track2_events.into_iter();
-
-    let mut t0 = track1.next();
-    let mut t1 = track2.next();
-
-    loop {
-        let (selected, non_selected, index) = match (t0.as_mut(), t1.as_mut()) {
-            (Some(t0), Some(t1)) if t1.vtime < t0.vtime => (t1, Some(t0), 1),
-            (Some(t0), t1) => (t0, t1, 0),
-            (t0, Some(t1)) => (t1, t0, 1),
-            (None, None) => {
-                break;
-            }
-        };
-
-        // Decrement timer on non-selected track
-        if let Some(non_selected) = non_selected {
-            non_selected.vtime -= selected.vtime;
-        }
-
-        if index == 0 {
-            if let Some(t0) = t0.take() {
-                combined.push(t0);
-            }
-
-            t0 = track1.next();
-        } else {
-            if let Some(t1) = t1.take() {
-                combined.push(t1);
-            }
-
-            t1 = track2.next();
-        }
-    }
-
-    combined
-}
-
-fn combine_events(events: Vec<TrackEvent>) -> Vec<DataEvent> {
-    let mut combined = Vec::with_capacity(events.len());
-    //let mut current_vtime = 0;
-    //let mut current_data = Vec::new();
-    let mut iter = events.into_iter();
-
-    while let Some(event) = iter.next() {
-        match event.event {
-            /*
-            Event::Midi(midi_msg) if current_data.is_empty() => {
-                // First MIDI event in set of events, dump into current buffer
-                current_vtime = event.vtime;
-                current_data = midi_msg.data;
-            },
-            Event::Midi(midi_msg) if event.vtime == 0 => {
-                // Combine this new event with previous event data
-                current_data.extend_from_slice(&midi_msg.data);
-            },
-            Event::Midi(midi_msg) => {
-                // This event has a different vtime, replace buffer with this event
-                let data = mem::replace(&mut current_data, midi_msg.data);
-                combined.push(DataEvent::new(current_vtime, LocalEvent::CombinedMidi(data)));
-                current_vtime = event.vtime;
-            },
-            */
-            Event::Midi(midi_msg) => {
-                combined.push(DataEvent::new(
-                    event.vtime,
-                    LocalEvent::CombinedMidi(midi_msg.data),
-                ));
-            }
-            Event::Meta(meta) => {
-                /*
-                if !current_data.is_empty() {
-                    let data = mem::replace(&mut current_data, Vec::new());
-                    combined.push(DataEvent::new(current_vtime, LocalEvent::CombinedMidi(data)));
-                    current_vtime = 0;
-                }
-                */
-                combined.push(DataEvent::new(event.vtime, LocalEvent::Meta(meta)));
-            }
-        };
-    }
-
-    /*
-    if !current_data.is_empty() {
-        combined.push(DataEvent::new(current_vtime, LocalEvent::CombinedMidi(current_data)));
-    }
-    */
-
-    combined
 }
 
 fn play_events(unit_per_division: u64, events: &[DataEvent]) -> Result<()> {
