@@ -1,3 +1,5 @@
+#![allow(unaligned_references)]
+
 use std::ffi::OsString;
 use std::mem::{self, MaybeUninit};
 use std::os::windows::ffi::OsStringExt;
@@ -58,7 +60,7 @@ impl WinMidiPort {
         }
 
         let device_caps = unsafe { device_caps.assume_init() };
-        let name: &[u16] = unsafe { &device_caps.szPname };
+        let name = device_caps.szPname.clone();
         let len = name.iter().position(|&v| v == 0).unwrap_or(name.len() - 1);
         let output = OsString::from_wide(&name[..len])
             .to_string_lossy()
