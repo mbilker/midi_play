@@ -7,16 +7,19 @@ use std::pin::Pin;
 use std::ptr;
 
 use anyhow::{Context, Result};
-use winapi::shared::basetsd::UINT_PTR;
-use winapi::shared::minwindef::{DWORD, UINT};
+use winapi::shared::basetsd::{DWORD_PTR, UINT_PTR};
+use winapi::shared::minwindef::{DWORD, FALSE, TRUE, UINT};
+use winapi::shared::ntdef::HANDLE;
+use winapi::um::handleapi::CloseHandle;
 use winapi::um::mmeapi::{
     midiOutClose, midiOutGetDevCapsW, midiOutGetNumDevs, midiOutLongMsg, midiOutOpen,
     midiOutPrepareHeader, midiOutReset, midiOutShortMsg, midiOutUnprepareHeader,
 };
 use winapi::um::mmsystem::{
-    CALLBACK_NULL, HMIDIOUT, MIDIERR_BASE, MIDIERR_NOTREADY, MIDIERR_STILLPLAYING, MIDIHDR,
+    CALLBACK_EVENT, HMIDIOUT, MIDIERR_BASE, MIDIERR_NOTREADY, MIDIERR_STILLPLAYING, MIDIHDR,
     MIDIOUTCAPSW, MMSYSERR_BADDEVICEID, MMSYSERR_BASE, MMSYSERR_NOERROR,
 };
+use winapi::um::synchapi::CreateEventW;
 
 const MHDR_DONE: DWORD = 0x00000001;
 //const MHDR_PREPARED: DWORD = 0x00000002;
@@ -35,6 +38,7 @@ struct InflightRequest {
 }
 
 pub struct WinMidiPort {
+    event_handle: HANDLE,
     handle: HMIDIOUT,
     inflight: Vec<InflightRequest>,
     inflight_to_remove: Vec<usize>,
@@ -75,14 +79,15 @@ impl WinMidiPort {
     }
 
     pub fn connect(port_number: UINT) -> Result<Self> {
+        let event_handle = unsafe { CreateEventW(ptr::null_mut(), TRUE, FALSE, ptr::null()) };
         let mut out_handle = MaybeUninit::uninit();
         let result = unsafe {
             midiOutOpen(
                 out_handle.as_mut_ptr(),
                 port_number as UINT,
+                event_handle as DWORD_PTR,
                 0,
-                0,
-                CALLBACK_NULL,
+                CALLBACK_EVENT,
             )
         };
 
@@ -94,10 +99,15 @@ impl WinMidiPort {
         }
 
         Ok(Self {
+            event_handle,
             handle: unsafe { out_handle.assume_init() },
             inflight: Vec::new(),
             inflight_to_remove: Vec::new(),
         })
+    }
+
+    pub fn event_handle(&self) -> HANDLE {
+        self.event_handle
     }
 
     pub fn send_reset(&mut self) -> Result<()> {
@@ -247,6 +257,8 @@ impl Drop for WinMidiPort {
                     result - MMSYSERR_BASE
                 );
             }
+
+            CloseHandle(self.event_handle);
         }
     }
 }

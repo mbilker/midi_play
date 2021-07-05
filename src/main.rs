@@ -12,9 +12,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use rimd::{Event, MetaCommand, MetaEvent, TrackEvent, SMF};
-//use winapi::shared::minwindef::FALSE;
-//use winapi::um::handleapi::CloseHandle;
-//use winapi::um::synchapi::CreateEventW;
+use winapi::um::synchapi::{SetEvent, WaitForSingleObject};
+use winapi::um::winbase::INFINITE;
 
 mod driver;
 mod thread_boost;
@@ -224,13 +223,6 @@ fn play_events(unit_per_division: u64, events: &[DataEvent]) -> Result<()> {
     let thread_boost = ThreadBoost::new();
     println!("Task Index: {}", thread_boost.task_index());
 
-    /*
-    // Event handle for Windows MIDI stream
-    let event_handle = unsafe {
-        CreateEventW(ptr::null_mut(), FALSE, FALSE, ptr::null())
-    };
-    */
-
     // Default tempo is 120 beats per minute
     let mut current_tempo = 500000;
 
@@ -248,6 +240,8 @@ fn play_events(unit_per_division: u64, events: &[DataEvent]) -> Result<()> {
         }
 
         //println!("event: {}", event);
+
+        unsafe { WaitForSingleObject(conn_out.event_handle(), INFINITE) };
 
         if event.delta_time > 0 {
             let waiting_micros = event.delta_time * current_tempo / unit_per_division;
@@ -275,6 +269,7 @@ fn play_events(unit_per_division: u64, events: &[DataEvent]) -> Result<()> {
         match &event.data {
             LocalEvent::Meta(meta) => {
                 println!("{}", meta);
+
                 match meta.command {
                     MetaCommand::TempoSetting => {
                         current_tempo = meta.data_as_u64(3);
@@ -282,6 +277,9 @@ fn play_events(unit_per_division: u64, events: &[DataEvent]) -> Result<()> {
                     }
                     _ => {}
                 };
+
+                // Set the event so we are not stuck waiting for too long
+                unsafe { SetEvent(conn_out.event_handle()) };
             }
             LocalEvent::CombinedMidi(data) => {
                 //println!("delta time: {}, data: {:02x?}", event.delta_time, data);
@@ -291,12 +289,6 @@ fn play_events(unit_per_division: u64, events: &[DataEvent]) -> Result<()> {
             }
         };
     }
-
-    /*
-    unsafe {
-        CloseHandle(event_handle);
-    };
-    */
 
     Ok(())
 }
