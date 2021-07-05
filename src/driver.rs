@@ -6,7 +6,7 @@ use std::os::windows::ffi::OsStringExt;
 use std::pin::Pin;
 use std::ptr;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use winapi::shared::basetsd::UINT_PTR;
 use winapi::shared::minwindef::{DWORD, UINT};
 use winapi::um::mmeapi::{
@@ -22,6 +22,11 @@ const MHDR_DONE: DWORD = 0x00000001;
 //const MHDR_PREPARED: DWORD = 0x00000002;
 //const MHDR_INQUEUE: DWORD = 0x00000004;
 //const MHDR_ISSTRM: DWORD = 0x00000008;
+
+const GM1_RESET: &'static [u8] = &[0xf0, 0x7e, 0x7f, 0x09, 0x01, 0xf7];
+const GS1_RESET: &'static [u8] = &[
+    0xf0, 0x41, 0x10, 0x42, 0x12, 0x40, 0x00, 0x7f, 0x00, 0x41, 0xf7,
+];
 
 struct InflightRequest {
     #[allow(unused)]
@@ -93,6 +98,15 @@ impl WinMidiPort {
             inflight: Vec::new(),
             inflight_to_remove: Vec::new(),
         })
+    }
+
+    pub fn send_reset(&mut self) -> Result<()> {
+        self.send(GS1_RESET)
+            .context("Failed to send GS1 reset message")?;
+        self.send(GM1_RESET)
+            .context("Failed to send GM1 reset message")?;
+
+        Ok(())
     }
 
     pub fn send(&mut self, message: &[u8]) -> Result<()> {
@@ -212,6 +226,11 @@ impl WinMidiPort {
 
 impl Drop for WinMidiPort {
     fn drop(&mut self) {
+        // Reset so other applications do not inherit our state
+        if let Err(e) = self.send_reset().context("Failed to send reset") {
+            eprintln!("{:?}", e);
+        }
+
         unsafe {
             let result = midiOutReset(self.handle);
             if result != MMSYSERR_NOERROR {

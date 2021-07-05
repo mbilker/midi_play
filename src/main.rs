@@ -22,11 +22,6 @@ mod thread_boost;
 use self::driver::WinMidiPort;
 use self::thread_boost::ThreadBoost;
 
-const GM1_RESET: &'static [u8] = &[0xf0, 0x7e, 0x7f, 0x09, 0x01, 0xf7];
-const GS1_RESET: &'static [u8] = &[
-    0xf0, 0x41, 0x10, 0x42, 0x12, 0x40, 0x00, 0x7f, 0x00, 0x41, 0xf7,
-];
-
 static RUNNING: AtomicBool = AtomicBool::new(true);
 
 struct DataEvent {
@@ -224,12 +219,7 @@ fn play_events(unit_per_division: u64, events: &[DataEvent]) -> Result<()> {
     println!("Connection open. Listen!");
 
     // Reset so sounds play correctly
-    conn_out
-        .send(GM1_RESET)
-        .context("Failed to send GM1 reset message")?;
-    conn_out
-        .send(GS1_RESET)
-        .context("Failed to send GS1 reset message")?;
+    conn_out.send_reset()?;
 
     let thread_boost = ThreadBoost::new();
     println!("Task Index: {}", thread_boost.task_index());
@@ -301,14 +291,6 @@ fn play_events(unit_per_division: u64, events: &[DataEvent]) -> Result<()> {
             }
         };
     }
-
-    // Reset so other applications do not inherit our state
-    conn_out
-        .send(GM1_RESET)
-        .context("Failed to send GM1 reset message")?;
-    conn_out
-        .send(GS1_RESET)
-        .context("Failed to send GS1 reset message")?;
 
     /*
     unsafe {
