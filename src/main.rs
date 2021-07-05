@@ -23,7 +23,9 @@ use self::driver::WinMidiPort;
 use self::thread_boost::ThreadBoost;
 
 const GM1_RESET: &'static [u8] = &[0xf0, 0x7e, 0x7f, 0x09, 0x01, 0xf7];
-const GS1_RESET: &'static [u8] = &[0xf0, 0x41, 0x10, 0x42, 0x12, 0x40, 0x00, 0x7f, 0x00, 0x41, 0xf7];
+const GS1_RESET: &'static [u8] = &[
+    0xf0, 0x41, 0x10, 0x42, 0x12, 0x40, 0x00, 0x7f, 0x00, 0x41, 0xf7,
+];
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
 
@@ -46,7 +48,8 @@ impl DataEvent {
 fn main() -> Result<()> {
     ctrlc::set_handler(|| {
         RUNNING.store(false, Ordering::Relaxed);
-    }).context("Failed to set Ctrl-C handler")?;
+    })
+    .context("Failed to set Ctrl-C handler")?;
 
     let file = env::args_os().nth(1).context("No file given")?;
     let file = PathBuf::from(file);
@@ -158,7 +161,10 @@ fn combine_events(events: Vec<TrackEvent>) -> Vec<DataEvent> {
             },
             */
             Event::Midi(midi_msg) => {
-                combined.push(DataEvent::new(event.vtime, LocalEvent::CombinedMidi(midi_msg.data)));
+                combined.push(DataEvent::new(
+                    event.vtime,
+                    LocalEvent::CombinedMidi(midi_msg.data),
+                ));
             }
             Event::Meta(meta) => {
                 /*
@@ -169,7 +175,7 @@ fn combine_events(events: Vec<TrackEvent>) -> Vec<DataEvent> {
                 }
                 */
                 combined.push(DataEvent::new(event.vtime, LocalEvent::Meta(meta)));
-            },
+            }
         };
     }
 
@@ -243,7 +249,6 @@ fn play_events(unit_per_division: u64, events: &[DataEvent]) -> Result<()> {
 
     let mut iter = events.iter();
     loop {
-    //for event in events {
         let event = match iter.next() {
             Some(event) => event,
             None => break,
@@ -261,15 +266,15 @@ fn play_events(unit_per_division: u64, events: &[DataEvent]) -> Result<()> {
             let waiting_time = Duration::from_micros(waiting_micros);
 
             //if conn_out.have_inflight() {
-                loop {
-                    let now = Instant::now();
+            loop {
+                let now = Instant::now();
 
-                    if now.duration_since(waiting_start) >= waiting_time {
-                        break;
-                    } else {
-                        conn_out.check_inflight()?;
-                    }
-                };
+                if now.duration_since(waiting_start) >= waiting_time {
+                    break;
+                } else {
+                    conn_out.check_inflight()?;
+                }
+            }
             //} else {
             //    thread::sleep(waiting_time);
             //}
@@ -295,7 +300,7 @@ fn play_events(unit_per_division: u64, events: &[DataEvent]) -> Result<()> {
                     .context("Failed to send MIDI message")?;
             }
         };
-    };
+    }
 
     // Reset so other applications do not inherit our state
     conn_out

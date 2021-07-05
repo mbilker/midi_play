@@ -18,9 +18,8 @@ impl ThreadBoost {
             .collect();
         let mut task_index: DWORD = 0;
 
-        let handle = unsafe {
-            AvSetMmThreadCharacteristicsW(task_name.as_ptr(), &mut task_index as *mut _)
-        };
+        let handle =
+            unsafe { AvSetMmThreadCharacteristicsW(task_name.as_ptr(), &mut task_index as *mut _) };
 
         Self { handle, task_index }
     }

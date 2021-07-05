@@ -1,14 +1,20 @@
 use std::ffi::OsString;
-use std::os::windows::ffi::OsStringExt;
 use std::mem::{self, MaybeUninit};
+use std::os::windows::ffi::OsStringExt;
 use std::pin::Pin;
 use std::ptr;
 
 use anyhow::Result;
 use winapi::shared::basetsd::UINT_PTR;
 use winapi::shared::minwindef::{DWORD, UINT};
-use winapi::um::mmeapi::{midiOutGetNumDevs, midiOutOpen, midiOutReset, midiOutClose, midiOutPrepareHeader, midiOutLongMsg, midiOutUnprepareHeader, midiOutGetDevCapsW, midiOutShortMsg};
-use winapi::um::mmsystem::{CALLBACK_NULL, HMIDIOUT, MIDIHDR, MIDIOUTCAPSW, MMSYSERR_BASE, MMSYSERR_NOERROR, MIDIERR_BASE, MIDIERR_NOTREADY, MIDIERR_STILLPLAYING, MMSYSERR_BADDEVICEID};
+use winapi::um::mmeapi::{
+    midiOutClose, midiOutGetDevCapsW, midiOutGetNumDevs, midiOutLongMsg, midiOutOpen,
+    midiOutPrepareHeader, midiOutReset, midiOutShortMsg, midiOutUnprepareHeader,
+};
+use winapi::um::mmsystem::{
+    CALLBACK_NULL, HMIDIOUT, MIDIERR_BASE, MIDIERR_NOTREADY, MIDIERR_STILLPLAYING, MIDIHDR,
+    MIDIOUTCAPSW, MMSYSERR_BADDEVICEID, MMSYSERR_BASE, MMSYSERR_NOERROR,
+};
 
 const MHDR_DONE: DWORD = 0x00000001;
 //const MHDR_PREPARED: DWORD = 0x00000002;
@@ -35,19 +41,28 @@ impl WinMidiPort {
     pub fn name(port_number: UINT) -> Result<String> {
         let mut device_caps: MaybeUninit<MIDIOUTCAPSW> = MaybeUninit::uninit();
         let result = unsafe {
-            midiOutGetDevCapsW(port_number as UINT_PTR, device_caps.as_mut_ptr(), mem::size_of::<MIDIOUTCAPSW>() as u32)
+            midiOutGetDevCapsW(
+                port_number as UINT_PTR,
+                device_caps.as_mut_ptr(),
+                mem::size_of::<MIDIOUTCAPSW>() as u32,
+            )
         };
 
         if result == MMSYSERR_BADDEVICEID {
             return Err(anyhow!("Port number out of range"));
         } else if result != MMSYSERR_NOERROR {
-            return Err(anyhow!("Failed to retrieve port name: {}", result - MMSYSERR_BASE));
+            return Err(anyhow!(
+                "Failed to retrieve port name: {}",
+                result - MMSYSERR_BASE
+            ));
         }
 
         let device_caps = unsafe { device_caps.assume_init() };
         let name: &[u16] = unsafe { &device_caps.szPname };
         let len = name.iter().position(|&v| v == 0).unwrap_or(name.len() - 1);
-        let output = OsString::from_wide(&name[..len]).to_string_lossy().into_owned();
+        let output = OsString::from_wide(&name[..len])
+            .to_string_lossy()
+            .into_owned();
 
         Ok(output)
     }
@@ -97,17 +112,15 @@ impl WinMidiPort {
             }
 
             loop {
-                let result = unsafe {
-                    midiOutShortMsg(
-                        self.handle,
-                        packet,
-                    )
-                };
+                let result = unsafe { midiOutShortMsg(self.handle, packet) };
                 if result == MIDIERR_NOTREADY {
                     continue;
                 } else {
                     if result != MMSYSERR_NOERROR {
-                        return Err(anyhow!("Failed to send message: {}", result - MMSYSERR_BASE));
+                        return Err(anyhow!(
+                            "Failed to send message: {}",
+                            result - MMSYSERR_BASE
+                        ));
                     }
                     break;
                 }
@@ -126,31 +139,26 @@ impl WinMidiPort {
                 dwOffset: 0,
                 dwReserved: unsafe { mem::zeroed() },
             };
-            self.inflight.push(InflightRequest {
-                message,
-                data,
-            });
+            self.inflight.push(InflightRequest { message, data });
             self.inflight_to_remove.reserve(1);
 
             let InflightRequest { data, .. } = self.inflight.last_mut().unwrap();
             let result = unsafe {
-                midiOutPrepareHeader(
-                    self.handle,
-                    data,
-                    mem::size_of::<MIDIHDR>() as u32,
-                )
+                midiOutPrepareHeader(self.handle, data, mem::size_of::<MIDIHDR>() as u32)
             };
             if result != MMSYSERR_NOERROR {
                 self.inflight.pop();
 
-                return Err(anyhow!("Failed to prepare message for sending: {}", result - MMSYSERR_BASE));
+                return Err(anyhow!(
+                    "Failed to prepare message for sending: {}",
+                    result - MMSYSERR_BASE
+                ));
             }
 
             // Send the message
             loop {
-                let result = unsafe {
-                    midiOutLongMsg(self.handle, data, mem::size_of::<MIDIHDR>() as u32)
-                };
+                let result =
+                    unsafe { midiOutLongMsg(self.handle, data, mem::size_of::<MIDIHDR>() as u32) };
                 if result == MIDIERR_NOTREADY {
                     continue;
                 } else {
@@ -181,7 +189,11 @@ impl WinMidiPort {
             }
 
             let result = unsafe {
-                midiOutUnprepareHeader(self.handle, &mut inflight.data, mem::size_of::<MIDIHDR>() as u32)
+                midiOutUnprepareHeader(
+                    self.handle,
+                    &mut inflight.data,
+                    mem::size_of::<MIDIHDR>() as u32,
+                )
             };
             if result != MIDIERR_STILLPLAYING {
                 self.inflight_to_remove.push(i);
@@ -201,12 +213,18 @@ impl Drop for WinMidiPort {
         unsafe {
             let result = midiOutReset(self.handle);
             if result != MMSYSERR_NOERROR {
-                eprintln!("Failed to reset Windows MM MIDI output port: {}", result - MMSYSERR_BASE);
+                eprintln!(
+                    "Failed to reset Windows MM MIDI output port: {}",
+                    result - MMSYSERR_BASE
+                );
             }
 
             let result = midiOutClose(self.handle);
             if result != MMSYSERR_NOERROR {
-                eprintln!("Failed to close Windows MM MIDI output port: {}", result - MMSYSERR_BASE);
+                eprintln!(
+                    "Failed to close Windows MM MIDI output port: {}",
+                    result - MMSYSERR_BASE
+                );
             }
         }
     }
