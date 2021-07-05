@@ -7,7 +7,13 @@ edition = "2018"
 [dependencies]
 anyhow = "1.0.28"
 ctrlc = "3.1.4"
+glium = "0.30.0"
+imgui = { path = "imgui-rs/imgui" }
+imgui-glium-renderer = { path = "imgui-rs/imgui-glium-renderer" }
+imgui-winit-support = { path = "imgui-rs/imgui-winit-support" }
+nfd2 = "0.2.0"
 rimd = { path = "rimd" }
+winit = "0.25.0"
 
 [dependencies.winapi]
 version = "0.3.9"

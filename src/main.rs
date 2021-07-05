@@ -1,8 +1,9 @@
 #[macro_use]
 extern crate anyhow;
+#[macro_use]
+extern crate imgui;
 
 use std::collections::VecDeque;
-use std::env;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,6 +12,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use imgui::{Condition, ImStr, ImString, Ui, Window};
+use nfd2::Response;
 //use rimd::SMFFormat;
 use rimd::{MetaCommand, MidiMessage, SMF};
 use winapi::shared::minwindef::UINT;
@@ -20,20 +23,25 @@ use winapi::um::winbase::INFINITE;
 mod driver;
 mod midi_file;
 mod thread_boost;
+mod window;
 
 use crate::driver::WinMidiPort;
 use crate::midi_file::{DataEvent, LocalEvent};
 use crate::thread_boost::ThreadBoost;
+use crate::window::{ImguiWindow, WindowHandler};
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
 
 struct PlayerInstance {
+    current_port_number: i32,
     chosen_port_number: Option<UINT>,
-    port_list: Vec<String>,
+    port_list: Vec<ImString>,
+    file_picker: Option<Receiver<Vec<PathBuf>>>,
     files_to_play: VecDeque<PathBuf>,
+    log_messages: Vec<ImString>,
     events: Vec<BasicMidiEvent>,
     current_player: Option<PlayerReceiver>,
-    current_player_handle: Option<JoinHandle<()>>,
+    current_player_thread: Option<JoinHandle<()>>,
 }
 
 struct BasicMidiEvent {
@@ -69,17 +77,20 @@ impl fmt::Display for BasicMidiEvent {
 impl PlayerInstance {
     fn new() -> Self {
         Self {
+            current_port_number: 0,
             chosen_port_number: None,
             port_list: Vec::new(),
+            file_picker: None,
             files_to_play: VecDeque::new(),
+            log_messages: Vec::new(),
             events: Vec::new(),
             current_player: None,
-            current_player_handle: None,
+            current_player_thread: None,
         }
     }
 
     fn add_message(&mut self, msg: impl Into<String>) {
-        println!("{}", msg.into());
+        self.log_messages.push(ImString::new(msg));
     }
 
     fn update_state(&mut self) {
@@ -94,26 +105,38 @@ impl PlayerInstance {
 
                     for i in 0..count {
                         if let Ok(name) = WinMidiPort::name(i) {
-                            self.port_list.push(name);
+                            self.port_list.push(ImString::new(name));
                         } else {
-                            self.port_list.push(String::from("<unknown>"));
+                            self.port_list.push(ImString::new("<unknown>"));
                         }
                     }
                 }
             };
         }
 
+        // Update file picker
+        if let Some(file_picker) = &self.file_picker {
+            match file_picker.try_recv() {
+                Ok(paths) => self.files_to_play.extend(paths.into_iter()),
+                Err(e) => match e {
+                    TryRecvError::Empty => {}
+                    TryRecvError::Disconnected => {
+                        self.file_picker = None;
+                    }
+                },
+            }
+        }
+
         // Update player status
         if let Some(current_player) = &self.current_player {
+            let mut new_messages = Vec::new();
             let mut new_events = Vec::new();
 
             let mut disconnected = false;
 
             loop {
                 match current_player.log.try_recv() {
-                    Ok(msg) => {
-                        println!("{}", msg);
-                    }
+                    Ok(msg) => new_messages.push(msg),
                     Err(e) => match e {
                         TryRecvError::Empty => break,
                         TryRecvError::Disconnected => {
@@ -140,6 +163,8 @@ impl PlayerInstance {
                 self.current_player = None;
             }
 
+            self.log_messages
+                .extend(new_messages.into_iter().map(ImString::new));
             self.events.extend(new_events);
         }
 
@@ -147,6 +172,52 @@ impl PlayerInstance {
         if !self.files_to_play.is_empty() && self.current_player.is_none() {
             self.play_next_file();
         }
+    }
+
+    fn button_pressed_open_file_dialog(&mut self) {
+        if self.file_picker.is_none() {
+            self.open_file_dialog();
+        }
+    }
+
+    fn button_pressed_play(&mut self) {
+        if self.current_player.is_none() {
+            self.play_next_file();
+        }
+    }
+
+    fn open_file_dialog(&mut self) {
+        if let Err(e) = self
+            .open_file_dialog_inner()
+            .context("Failed to open file dialog")
+        {
+            self.add_message(format!("{:?}", e));
+        }
+    }
+
+    fn open_file_dialog_inner(&mut self) -> Result<()> {
+        let (sender, receiver) = mpsc::channel();
+
+        thread::Builder::new()
+            .name(String::from("File Picker"))
+            .spawn(move || {
+                let paths = match nfd2::open_file_multiple_dialog(None, None)
+                    .expect("Failed to open file dialog")
+                {
+                    Response::Okay(path) => vec![path],
+                    Response::OkayMultiple(paths) => paths,
+                    Response::Cancel => Vec::new(),
+                };
+
+                if let Err(e) = sender.send(paths) {
+                    eprintln!("Failed to send paths: {:?}", e);
+                }
+            })
+            .context("Failed to spawn thread")?;
+
+        self.file_picker = Some(receiver);
+
+        Ok(())
     }
 
     fn play_next_file(&mut self) {
@@ -179,9 +250,136 @@ impl PlayerInstance {
             log: log_receiver,
             event: event_receiver,
         });
-        self.current_player_handle = Some(handle);
+        self.current_player_thread = Some(handle);
 
         Ok(())
+    }
+}
+
+impl WindowHandler for PlayerInstance {
+    fn on_draw(&mut self, ui: &mut Ui) -> bool {
+        if !RUNNING.load(Ordering::Relaxed) {
+            return false;
+        }
+
+        self.update_state();
+
+        let display_size = ui.io().display_size;
+
+        ui.show_demo_window(&mut true);
+
+        Window::new(im_str!("Control"))
+            .position([0.0, 0.0], Condition::Always)
+            //.size(display_size, Condition::Always)
+            .size(
+                [display_size[0] * (2.0 / 3.0), display_size[1] * (2.0 / 3.0)],
+                Condition::FirstUseEver,
+            )
+            //.no_decoration()
+            .menu_bar(false)
+            .movable(false)
+            //.resizable(false)
+            .title_bar(false)
+            .build(ui, || {
+                ui.text(im_str!("Hello, World!"));
+
+                if let Some(port_id) = self.chosen_port_number {
+                    ui.text(&ImString::new(format!("Port ID: {}", port_id)));
+                } else {
+                    let port_list: Vec<&ImStr> =
+                        self.port_list.iter().map(ImString::as_ref).collect();
+
+                    ui.text(im_str!("Select MIDI output port"));
+                    ui.list_box(im_str!(""), &mut self.current_port_number, &port_list, 3);
+
+                    if ui.button(im_str!("Ok")) {
+                        self.chosen_port_number = Some(self.current_port_number as _);
+                    }
+                }
+
+                ui.separator();
+
+                if ui.button(im_str!("Open File(s)")) {
+                    self.button_pressed_open_file_dialog();
+                }
+                if !self.files_to_play.is_empty() {
+                    ui.same_line();
+                    if ui.button(im_str!("Play")) {
+                        self.button_pressed_play();
+                    }
+
+                    ui.separator();
+
+                    for path in self.files_to_play.iter().take(5) {
+                        let id = ui.push_id(path as *const _);
+
+                        ui.bullet_text(&ImString::new(path.display().to_string()));
+
+                        id.pop();
+                    }
+                }
+
+                ui.separator();
+
+                const LOG_MESSAGES_TO_DISPLAY: usize = 30;
+                const EVENTS_TO_DISPLAY: usize = 30;
+
+                let iter = if self.log_messages.len() > LOG_MESSAGES_TO_DISPLAY {
+                    let start = self.log_messages.len() - 1 - LOG_MESSAGES_TO_DISPLAY;
+
+                    self.log_messages[start..].iter()
+                } else {
+                    self.log_messages.iter()
+                };
+                for msg in iter {
+                    let id = ui.push_id(msg.as_ptr());
+
+                    ui.text(msg);
+
+                    id.pop();
+                }
+
+                ui.columns(3, im_str!("Data Table"), true);
+                ui.separator();
+                ui.text(im_str!("Delta Time"));
+                ui.next_column();
+                ui.text(im_str!("Channel"));
+                ui.next_column();
+                ui.text(im_str!("Data"));
+                ui.next_column();
+
+                for event in self.events.iter().rev().take(EVENTS_TO_DISPLAY).rev() {
+                    ui.text(ImString::new(format!("{}", event.delta_time)));
+                    ui.next_column();
+                    if let Some(channel) = event.msg.channel() {
+                        ui.text(ImString::new(format!("{}", channel)));
+                    }
+                    ui.next_column();
+                    ui.text(ImString::new(format!("{}", event)));
+                    ui.next_column();
+                }
+
+                ui.columns(1, im_str!(""), false);
+                ui.separator();
+            });
+
+        true
+    }
+
+    fn on_exit(&mut self) {
+        RUNNING.store(false, Ordering::Relaxed);
+
+        if let Some(handle) = self.current_player_thread.take() {
+            if let Err(e) = handle.join() {
+                eprintln!("Failed to join thread: {:?}", e);
+            }
+        }
+    }
+}
+
+impl Drop for PlayerInstance {
+    fn drop(&mut self) {
+        self.on_exit();
     }
 }
 
@@ -191,48 +389,9 @@ fn main() -> Result<()> {
     })
     .context("Failed to set Ctrl-C handler")?;
 
-    let mut player = PlayerInstance::new();
-
-    // Build initial state
-    player.update_state();
-
-    println!("Ports:");
-
-    for (i, port_name) in player.port_list.iter().enumerate() {
-        println!("{}: {}", i, port_name);
-    }
-
-    if player.port_list.is_empty() {
-        println!("No ports!");
-        return Ok(());
-    } else {
-        player.chosen_port_number = Some((player.port_list.len() - 1) as u32);
-    }
-
-    for path in env::args_os().skip(1) {
-        player.files_to_play.push_back(PathBuf::from(path));
-    }
-
-    // Begin playback
-    if !player.files_to_play.is_empty() {
-        player.play_next_file();
-
-        while RUNNING.load(Ordering::Relaxed) {
-            player.update_state();
-
-            for event in player.events.drain(..) {
-                println!("{} {}", event.delta_time, event);
-            }
-
-            thread::sleep(Duration::from_millis(1));
-        }
-    }
-
-    if let Some(handle) = player.current_player_handle.take() {
-        if let Err(e) = handle.join() {
-            return Err(anyhow!("Failed to join player thread: {:?}", e));
-        }
-    }
+    let player = PlayerInstance::new();
+    let window = ImguiWindow::new("MIDI Player")?;
+    window.run(player);
 
     Ok(())
 }
