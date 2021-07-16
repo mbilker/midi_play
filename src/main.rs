@@ -17,6 +17,7 @@ use winapi::shared::minwindef::UINT;
 use winapi::um::synchapi::{SetEvent, WaitForSingleObject};
 use winapi::um::winbase::INFINITE;
 
+mod bindings;
 mod driver;
 mod midi_file;
 mod thread_boost;

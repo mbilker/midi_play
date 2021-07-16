@@ -8,7 +8,11 @@ edition = "2018"
 anyhow = "1.0.28"
 ctrlc = "3.1.4"
 rimd = { path = "rimd" }
+windows = "0.17.1"
 
 [dependencies.winapi]
 version = "0.3.9"
-features = ["avrt", "basetsd", "minwindef", "mmeapi", "mmsystem", "ntdef", "synchapi"]
+features = ["basetsd", "minwindef", "mmeapi", "mmsystem", "ntdef", "synchapi"]
+
+[build-dependencies]
+windows = "0.17.1"
