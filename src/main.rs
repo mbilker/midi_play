@@ -311,7 +311,6 @@ impl FilePlayer {
 
         let mut iter = self.events.into_iter();
         loop {
-            //for event in events {
             let event = match iter.next() {
                 Some(event) => event,
                 None => break,
@@ -362,7 +361,7 @@ impl FilePlayer {
                     // Set the event so we are not stuck waiting for too long
                     unsafe { SetEvent(conn_out.event_handle()) };
                 }
-                LocalEvent::CombinedMidi(data) => {
+                LocalEvent::SysEx(data) => {
                     //println!("delta time: {}, data: {:02x?}", event.delta_time, data);
                     conn_out
                         .send(&data)
@@ -371,6 +370,16 @@ impl FilePlayer {
                     self.event_log.send(BasicMidiEvent {
                         delta_time: event.delta_time,
                         msg: MidiMessage::from_bytes(data),
+                    })?;
+                }
+                LocalEvent::Midi(data) => {
+                    //println!("delta time: {}, data: {:02x?}", event.delta_time, data);
+                    conn_out
+                        .send(&data)
+                        .context("Failed to send MIDI message")?;
+                    self.event_log.send(BasicMidiEvent {
+                        delta_time: event.delta_time,
+                        msg: MidiMessage::from_bytes(data.to_vec()),
                     })?;
                 }
             };

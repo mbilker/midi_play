@@ -1,6 +1,6 @@
 //use std::mem;
 
-use rimd::{Event, MetaEvent, TrackEvent};
+use rimd::{Event, MetaEvent, Status, TrackEvent};
 
 pub struct DataEvent {
     pub delta_time: u64,
@@ -8,7 +8,8 @@ pub struct DataEvent {
 }
 
 pub enum LocalEvent {
-    CombinedMidi(Vec<u8>),
+    Midi([u8; 3]),
+    SysEx(Vec<u8>),
     Meta(MetaEvent),
 }
 
@@ -91,7 +92,14 @@ pub fn combine_events(events: Vec<TrackEvent>) -> Vec<DataEvent> {
             Event::Midi(midi_msg) => {
                 combined.push(DataEvent::new(
                     event.vtime,
-                    LocalEvent::CombinedMidi(midi_msg.data),
+                    if midi_msg.status() == Status::SysExStart {
+                        LocalEvent::SysEx(midi_msg.data)
+                    } else {
+                        let mut data = [0; 3];
+                        data[..midi_msg.data.len()].copy_from_slice(&midi_msg.data);
+
+                        LocalEvent::Midi(data)
+                    },
                 ));
             }
             Event::Meta(meta) => {
